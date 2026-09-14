@@ -13,6 +13,9 @@ adb logcat -d -s NightFlow NightFlowSmoke AndroidRuntime > smoke-results/logcat.
 adb pull /sdcard/Android/data/com.nightflow.game/files/smoke smoke-results/screenshots || true
 python3 - <<'PY'
 from pathlib import Path
+import base64
+for preview in sorted(Path("smoke-results/screenshots").rglob("*.jpg")):
+    print("NF_PREVIEW=" + preview.stem + ":" + base64.b64encode(preview.read_bytes()).decode())
 text = Path("smoke-results/instrumentation.txt").read_text()
 if "smoke=PASS" not in text:
     raise SystemExit("Android launch/control/rendering smoke test did not pass")

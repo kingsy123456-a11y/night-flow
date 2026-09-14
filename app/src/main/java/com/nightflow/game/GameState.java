@@ -33,7 +33,7 @@ public final class GameState {
     }
     public void pause() { if(phase==RUNNING) phase=PAUSED; }
     public void resume() { if(phase==PAUSED) { phase=RUNNING; countdown=Math.max(1f,countdown); } }
-    public void menu() { phase=MENU; speed=0; for(Car c:traffic) c.active=false; }
+    public void menu() { phase=MENU; speed=0; flash=near=invincible=countdown=0; for(Car c:traffic) c.active=false; }
     public void tick(float rawDt,float input,boolean brake,boolean gas) {
         if(!Float.isFinite(rawDt)||rawDt<=0) return;
         float dt=Math.min(rawDt,0.05f);

@@ -37,6 +37,9 @@ public final class SmokeRunner extends Instrumentation {
         check(bitmap!=null,"Screenshot unavailable");
         File dir=new File(a.getExternalFilesDir(null),"smoke");check(dir.isDirectory()||dir.mkdirs(),"Create screenshot directory");
         try(FileOutputStream out=new FileOutputStream(new File(dir,name+".png"))){bitmap.compress(Bitmap.CompressFormat.PNG,100,out);}
+        Bitmap preview=Bitmap.createScaledBitmap(bitmap,880,Math.max(1,bitmap.getHeight()*880/bitmap.getWidth()),true);
+        try(FileOutputStream out=new FileOutputStream(new File(dir,name+".jpg"))){preview.compress(Bitmap.CompressFormat.JPEG,65,out);}
+        if(preview!=bitmap)preview.recycle();
         bitmap.recycle();
     }
     private void touch(MainActivity a,int action,float x,float y) {
