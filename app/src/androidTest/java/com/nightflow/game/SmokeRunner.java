@@ -65,7 +65,11 @@ public final class SmokeRunner extends Instrumentation {
             runOnMainSync(()->{Settings cfg=new Settings(app.settings);cfg.control=1;app.applySettings(cfg);});
             float oldX=a.renderer.state.x;
             float tx=a.hud.safeLeft+a.dp(95),ty=a.hud.getHeight()-a.dp(40);
-            touch(a,MotionEvent.ACTION_DOWN,tx,ty);SystemClock.sleep(650);touch(a,MotionEvent.ACTION_UP,tx,ty);
+            touch(a,MotionEvent.ACTION_DOWN,tx,ty);
+            check(a.renderer.touch>.5f,"Touch not registered: phase="+a.renderer.state.phase+" point="+tx+","+ty+" size="+a.hud.getWidth()+"x"+a.hud.getHeight());
+            try {
+                await(()->app.renderer.state.x>oldX+.85f,12000,"Right touch did not move the car");
+            } finally {touch(a,MotionEvent.ACTION_UP,tx,ty);}
             check(a.renderer.state.x>oldX+.7f,"Right touch control did not steer");
             SystemClock.sleep(500);check(a.renderer.touch==0,"Touch did not release");
             screenshot(a,"02-driving");
@@ -96,6 +100,10 @@ public final class SmokeRunner extends Instrumentation {
             finish(Activity.RESULT_OK,result);
         } catch(Throwable e) {
             android.util.Log.e("NightFlowSmoke","Smoke failed",e);
+            if(a!=null) {
+                try{screenshot(a,"04-failure");}catch(Exception ignored){}
+                result.putString("state","phase="+a.renderer.state.phase+" x="+a.renderer.state.x+" distance="+a.renderer.state.distance+" frames="+a.renderer.framesRendered+" fps="+a.renderer.actualFps+" gl="+a.renderer.lastGlError);
+            }
             result.putString("smoke","FAIL");result.putString("failure",android.util.Log.getStackTraceString(e));
             finish(Activity.RESULT_CANCELED,result);
         }
