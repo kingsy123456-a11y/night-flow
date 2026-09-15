@@ -3,6 +3,8 @@ set -euo pipefail
 mkdir -p smoke-results
 adb shell wm size 720x1280
 adb shell wm density 240
+# Acknowledge Android's full-screen tutorial on the disposable test device.
+adb shell settings put secure immersive_mode_confirmations confirmed
 adb install -r app/build/outputs/apk/debug/app-debug.apk
 adb install -r app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
 adb shell settings put system accelerometer_rotation 0
