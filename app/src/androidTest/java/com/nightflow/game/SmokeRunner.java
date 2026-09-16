@@ -12,6 +12,8 @@ import android.os.SystemClock;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.accessibility.AccessibilityNodeInfo;
+import java.util.List;
 import android.widget.Button;
 import java.io.File;
 import java.io.FileOutputStream;
@@ -35,7 +37,22 @@ public final class SmokeRunner extends Instrumentation {
         }
         return null;
     }
+    private void dismissLauncherAnr(){
+        // The disposable AOSP launcher can hang after wm size/density changes.
+        // Dismiss only Quickstep's dialog; never suppress Night Flow errors.
+        AccessibilityNodeInfo root=getUiAutomation().getRootInActiveWindow();
+        if(root==null)return;
+        List<AccessibilityNodeInfo> title=root.findAccessibilityNodeInfosByText("Quickstep");
+        if(!title.isEmpty()){
+            List<AccessibilityNodeInfo> close=root.findAccessibilityNodeInfosByText("Close app");
+            if(!close.isEmpty()){
+                check(close.get(0).performAction(AccessibilityNodeInfo.ACTION_CLICK),"Could not dismiss launcher dialog");
+                SystemClock.sleep(800);
+            }
+        }
+    }
     private void screenshot(MainActivity a,String name) throws Exception {
+        dismissLauncherAnr();
         Bitmap bitmap=getUiAutomation().takeScreenshot();
         check(bitmap!=null,"Screenshot unavailable");
         File dir=new File(a.getExternalFilesDir(null),"smoke");check(dir.isDirectory()||dir.mkdirs(),"Create screenshot directory");
@@ -110,7 +127,7 @@ public final class SmokeRunner extends Instrumentation {
             runOnMainSync(()->click(modes.getWindow().getDecorView(),"mode3"));
             check(a.settings.mode==3,"AI mode choice not applied");runOnMainSync(app::startGame);
             await(()->app.renderer.state.mode==3&&app.renderer.state.phase==GameState.RUNNING,30000,"AI mode did not start");seedDrive(a);
-            await(()->app.renderer.state.rivals[0].distance>1,45000,"AI did not drive");frames(a,2);screenshot(a,"05-ai-race");
+            await(()->app.renderer.state.rivals[0].distance>1,45000,"AI did not drive");app.gl.queueEvent(()->{for(int i=0;i<3;i++){app.renderer.state.rivals[i].distance=app.renderer.state.distance+16+i*15;app.renderer.state.rivals[i].speed=30;}});frames(a,3);screenshot(a,"05-ai-race");
             runOnMainSync(app::backToMenu);frames(a,1);
             runOnMainSync(()->{Settings cfg=new Settings(app.settings);cfg.mode=4;cfg.language=2;cfg.night=true;cfg.quality=0;app.applySettings(cfg);app.startGame();});
             await(()->app.renderer.state.mode==4&&app.renderer.state.phase==GameState.RUNNING,30000,"Time attack did not start");seedDrive(a);
