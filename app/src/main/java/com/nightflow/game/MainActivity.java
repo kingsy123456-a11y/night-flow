@@ -26,6 +26,11 @@ import android.view.Choreographer;
 import android.view.Display;
 import android.view.Gravity;
 import android.view.View;
+import android.view.MotionEvent;
+import android.util.AtomicFile;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
 import android.view.Window;
 import android.view.WindowInsets;
 import android.view.WindowInsetsController;
@@ -61,6 +66,8 @@ public class MainActivity extends Activity implements SensorEventListener,Choreo
     private long lastRenderRequest=0,lastHud=0;
     private int observedPhase=GameState.MENU,lastRotation=-1;
     private Dialog currentDialog;
+    private String runGhostKey;
+    private boolean newGhostRecord=false;
     private int safeLeft=18,safeRight=18;
     private static final int MINT=0xff67eddb,WHITE=0xfff1f5f7,MUTED=0xffa5b8c9,INK=0xff0b1523;
 
@@ -132,7 +139,7 @@ public class MainActivity extends Activity implements SensorEventListener,Choreo
             int phase=renderer.state.phase;
             if(phase!=observedPhase) {
                 observedPhase=phase;
-                if(phase==GameState.CRASHED) {saveRecord();showEnd();}
+                if(phase==GameState.CRASHED||phase==GameState.FINISHED) {saveRecord();saveGhost();showEnd();}
                 else if(phase==GameState.PAUSED) showPause();
             }
         }
@@ -151,7 +158,10 @@ public class MainActivity extends Activity implements SensorEventListener,Choreo
     public void startGame() {
         calibrate();clearInputs();overlay.removeAllViews();overlay.setBackgroundColor(Color.TRANSPARENT);
         observedPhase=GameState.RUNNING;
-        gl.queueEvent(()->renderer.state.start(settings.mode));
+        renderer.garage=false;renderer.preview=null;newGhostRecord=false;
+        Settings runSettings=new Settings(settings);runGhostKey=runSettings.ghostKey();
+        GhostRun replay=runSettings.mode==GameState.TIME_ATTACK?loadGhost(runGhostKey):null;
+        gl.queueEvent(()->{renderer.state.configure(runSettings);renderer.state.start(runSettings.mode,replay);});
     }
     public void pauseGame() {
         if(renderer.state.phase!=GameState.RUNNING) return;
@@ -171,7 +181,8 @@ public class MainActivity extends Activity implements SensorEventListener,Choreo
         int p=renderer.state.phase;
         if(p==GameState.RUNNING) pauseGame();
         else if(p==GameState.PAUSED) resumeGame();
-        else if(p==GameState.CRASHED) backToMenu();
+        else if(p==GameState.CRASHED||p==GameState.FINISHED) backToMenu();
+        else if(renderer.garage) showMenu();
         else super.onBackPressed();
     }
     public void onCollision() {
@@ -186,104 +197,165 @@ public class MainActivity extends Activity implements SensorEventListener,Choreo
         int mode=renderer.state.mode,score=renderer.state.score;
         if(score>preferences.getInt("best-"+mode,0)) preferences.edit().putInt("best-"+mode,score).apply();
     }
-    private void showMenu() {
-        overlay.removeAllViews();
-        overlay.setBackground(new GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT,
-            new int[]{0xe8091523,0x88091523,0x00091523}));
-        LinearLayout column=column();
-        FrameLayout.LayoutParams p=new FrameLayout.LayoutParams(dp(310),-2,Gravity.LEFT|Gravity.CENTER_VERTICAL);
-        p.leftMargin=Math.max(dp(26),safeLeft);p.rightMargin=dp(12);overlay.addView(column,p);
-        TextView badge=label("OTVORENA CESTA  /  TVOJ RITAM",10,MINT);
-        badge.setLetterSpacing(.18f);column.addView(badge);
-        TextView title=label("NIGHT FLOW",37,WHITE);
-        title.setTypeface(Typeface.create("sans-serif-condensed",Typeface.BOLD));title.setLetterSpacing(.07f);
-        column.addView(title);space(column,6);
-        column.addView(label("Nagni telefon. Pronađi svoj tok.",13,MUTED));space(column,17);
-        column.addView(button("VOZI   ›",true,this::startGame),new LinearLayout.LayoutParams(-1,dp(48)));
-        space(column,9);
-        LinearLayout row=new LinearLayout(this);
-        row.addView(button("POSTAVKE",false,this::showSettings),new LinearLayout.LayoutParams(0,dp(43),1));
-        View gap=new View(this);row.addView(gap,new LinearLayout.LayoutParams(dp(8),1));
-        row.addView(button("GARAŽA",false,this::showGarage),new LinearLayout.LayoutParams(0,dp(43),1));
-        column.addView(row);space(column,10);
-        String description=settings.mode==0?"lagana vožnja bez prekida":settings.mode==1?"izbjegni svaki sudar":"brže i gušći saobraćaj";
-        Button modeButton=button(Settings.MODES[settings.mode]+"  ·  "+description,false,()->{
-            Settings changed=new Settings(settings);changed.mode=(settings.mode+1)%3;applySettings(changed);showMenu();
-        });
-        modeButton.setTextSize(10);column.addView(modeButton,new LinearLayout.LayoutParams(-1,dp(39)));
-        space(column,10);
-        column.addView(label("REKORD  "+preferences.getInt("best-"+settings.mode,0)+"   ·   "+Settings.CARS[settings.car],10,MUTED));
-        TextView bottom=label("ORIGINALNI SOUNDTRACK   /   78 BPM",10,0xffc7d3e0);bottom.setLetterSpacing(.12f);
-        FrameLayout.LayoutParams bp=new FrameLayout.LayoutParams(-2,-2,Gravity.BOTTOM|Gravity.RIGHT);
-        bp.rightMargin=Math.max(dp(24),safeRight);bp.bottomMargin=dp(18);overlay.addView(bottom,bp);
+    private String t(String key,Object... args){return L.t(settings,key,args);}
+    private GhostRun loadGhost(String key){
+        AtomicFile file=new AtomicFile(new File(getFilesDir(),key+".ghost"));
+        try(FileInputStream in=file.openRead()){return GhostRun.read(in);}
+        catch(java.io.IOException e){return null;}
     }
-    private LinearLayout centerPanel(String title,String subtitle) {
+    private void saveGhost(){
+        GhostRun record=renderer.state.completedGhost;
+        if(record==null||runGhostKey==null||renderer.state.phase!=GameState.FINISHED)return;
+        GhostRun old=loadGhost(runGhostKey);if(old!=null&&old.duration<=record.duration)return;
+        AtomicFile file=new AtomicFile(new File(getFilesDir(),runGhostKey+".ghost"));
+        FileOutputStream out=null;
+        try{out=file.startWrite();record.write(out);file.finishWrite(out);newGhostRecord=true;}
+        catch(java.io.IOException e){if(out!=null)file.failWrite(out);android.util.Log.w("NightFlow","Replay save",e);}
+    }
+    private void showMenu(){
+        renderer.garage=false;renderer.preview=null;
+        overlay.removeAllViews();overlay.setBackground(new GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT,
+            new int[]{0xec091523,0x82091523,0x00091523}));
+        LinearLayout column=column();
+        FrameLayout.LayoutParams p=new FrameLayout.LayoutParams(dp(320),-2,Gravity.LEFT|Gravity.CENTER_VERTICAL);
+        p.leftMargin=Math.max(dp(26),safeLeft);overlay.addView(column,p);
+        TextView badge=label(t("tag"),10,MINT);badge.setLetterSpacing(.16f);column.addView(badge);
+        TextView title=label("NIGHT FLOW",37,WHITE);title.setTypeface(Typeface.create("sans-serif-condensed",Typeface.BOLD));
+        title.setLetterSpacing(.07f);column.addView(title);space(column,5);
+        column.addView(label(t("tagline"),13,MUTED));space(column,14);
+        Button drive=button(t("drive"),true,this::startGame);drive.setTag("drive");
+        column.addView(drive,new LinearLayout.LayoutParams(-1,dp(47)));space(column,8);
+        LinearLayout row=new LinearLayout(this);
+        Button settingButton=button(t("settings"),false,this::showSettings);settingButton.setTag("settings");
+        row.addView(settingButton,new LinearLayout.LayoutParams(0,dp(42),1));
+        View gap=new View(this);row.addView(gap,new LinearLayout.LayoutParams(dp(8),1));
+        Button garageButton=button(t("garage"),false,this::showGarage);garageButton.setTag("garage");garageButton.setTextSize(10);
+        row.addView(garageButton,new LinearLayout.LayoutParams(0,dp(42),1));column.addView(row);space(column,9);
+        Button modes=button(t("mode"+settings.mode)+"  ›",false,this::showModes);modes.setTag("modes");
+        column.addView(modes,new LinearLayout.LayoutParams(-1,dp(38)));space(column,8);
+        column.addView(label(t("record")+"  "+preferences.getInt("best-"+settings.mode,0)+"   ·   "+Settings.CARS[settings.car],10,MUTED));
+        TextView bottom=label("2.0 / "+t("soundtrack"),9,0xffc7d3e0);bottom.setLetterSpacing(.10f);
+        FrameLayout.LayoutParams bp=new FrameLayout.LayoutParams(-2,-2,Gravity.BOTTOM|Gravity.RIGHT);
+        bp.rightMargin=Math.max(dp(24),safeRight);bp.bottomMargin=dp(16);overlay.addView(bottom,bp);
+    }
+    public void showModes(){
+        Settings draft=new Settings(settings);LinearLayout box=column();box.setPadding(dp(22),dp(16),dp(22),dp(18));
+        box.addView(label(t("modes"),23,WHITE));Dialog dialog=makeDialog(box);
+        for(int i=0;i<5;i++){
+            final int mode=i;space(box,12);
+            Button b=button(t("mode"+i)+(settings.mode==i?"  ✓":""),settings.mode==i,()->{
+                draft.mode=mode;applySettings(draft);dialog.dismiss();showMenu();
+            });b.setTag("mode"+i);box.addView(b,new LinearLayout.LayoutParams(-1,dp(43)));
+            space(box,5);box.addView(label(t("desc"+i),12,MUTED));
+        }
+        space(box,16);spinner(box,t("traffic"),L.options(settings,"density",3),draft.density,n->draft.density=n);
+        spinner(box,t("length"),new String[]{"2 km","5 km"},draft.raceLength,n->draft.raceLength=n);
+        box.addView(label(t("ghostHint"),11,MUTED));dialog.show();sizeDialog(dialog);
+    }
+    private LinearLayout centerPanel(String title,String subtitle){
         overlay.removeAllViews();overlay.setBackgroundColor(0xa6091523);
         LinearLayout panel=column();panel.setPadding(dp(22),dp(16),dp(22),dp(16));
-        panel.setBackground(shape(0xef0b1929,0xff294357,18));
-        FrameLayout.LayoutParams p=new FrameLayout.LayoutParams(dp(325),-2,Gravity.CENTER);overlay.addView(panel,p);
-        panel.addView(label(title,24,WHITE));panel.addView(label(subtitle,12,MUTED));space(panel,12);
-        return panel;
+        panel.setBackground(shape(0xf20b1929,0xff294357,18));
+        FrameLayout.LayoutParams p=new FrameLayout.LayoutParams(dp(345),-2,Gravity.CENTER);overlay.addView(panel,p);
+        panel.addView(label(title,24,WHITE));panel.addView(label(subtitle,12,MUTED));space(panel,12);return panel;
     }
-    private void showPause() {
-        if(currentDialog!=null&&currentDialog.isShowing()) return;
-        LinearLayout panel=centerPanel("TVOJ TRENUTAK PAUZE","Vožnja te čeka.");
-        panel.addView(button("NASTAVI",true,this::resumeGame),new LinearLayout.LayoutParams(-1,dp(42)));space(panel,7);
-        panel.addView(button("PORAVNAJ VOLAN",false,()->{calibrate();android.widget.Toast.makeText(this,"Volan je poravnat.",android.widget.Toast.LENGTH_SHORT).show();}),new LinearLayout.LayoutParams(-1,dp(39)));
-        space(panel,7);panel.addView(button("POSTAVKE",false,this::showSettings),new LinearLayout.LayoutParams(-1,dp(39)));
-        space(panel,7);panel.addView(button("GLAVNI MENI",false,this::backToMenu),new LinearLayout.LayoutParams(-1,dp(39)));
+    private void showPause(){
+        if(currentDialog!=null&&currentDialog.isShowing())return;
+        LinearLayout panel=centerPanel(t("pause"),t("waiting"));
+        panel.addView(button(t("resume"),true,this::resumeGame),new LinearLayout.LayoutParams(-1,dp(42)));space(panel,7);
+        panel.addView(button(t("calibrate"),false,()->{calibrate();android.widget.Toast.makeText(this,t("calibrated"),android.widget.Toast.LENGTH_SHORT).show();}),new LinearLayout.LayoutParams(-1,dp(37)));
+        space(panel,7);panel.addView(button(t("settings"),false,this::showSettings),new LinearLayout.LayoutParams(-1,dp(37)));
+        space(panel,7);panel.addView(button(t("menu"),false,this::backToMenu),new LinearLayout.LayoutParams(-1,dp(37)));
     }
-    private void showEnd() {
-        GameState g=renderer.state;
-        LinearLayout panel=centerPanel("JOŠ JEDNA VOŽNJA?",String.format(Locale.ROOT,"%.2f km   ·   %d preticanja",g.distance/1000,g.passes));
-        TextView points=label(g.score+"",39,MINT);points.setTypeface(Typeface.DEFAULT_BOLD);panel.addView(points);
-        panel.addView(label("REKORD  "+preferences.getInt("best-"+g.mode,0),11,MUTED));space(panel,14);
-        panel.addView(button("PONOVO VOZI",true,this::startGame),new LinearLayout.LayoutParams(-1,dp(44)));space(panel,9);
-        panel.addView(button("GLAVNI MENI",false,this::backToMenu),new LinearLayout.LayoutParams(-1,dp(40)));
+    private void showEnd(){
+        GameState g=renderer.state;boolean race=g.mode>=GameState.AI_RACE;
+        LinearLayout panel=centerPanel(t(g.phase==GameState.FINISHED?"finished":"ended"),t("result",g.distance/1000,g.passes));
+        TextView points=label(race?L.clock(g.finishTime):""+g.score,34,MINT);points.setTypeface(Typeface.DEFAULT_BOLD);panel.addView(points);
+        if(g.mode==GameState.AI_RACE)panel.addView(label(t("place",g.position),16,WHITE));
+        if(g.penalty>0)panel.addView(label(t("penalty",g.penalty),12,0xffffb09a));
+        if(g.mode==GameState.TIME_ATTACK){
+            panel.addView(label(newGhostRecord?t("newbest"):t("record")+"  "+(g.bestTime>0?L.clock(g.bestTime):"—"),11,MINT));
+        }else if(!race)panel.addView(label(t("record")+"  "+preferences.getInt("best-"+g.mode,0),11,MUTED));
+        space(panel,12);panel.addView(button(t("again"),true,this::startGame),new LinearLayout.LayoutParams(-1,dp(42)));space(panel,8);
+        panel.addView(button(t("menu"),false,this::backToMenu),new LinearLayout.LayoutParams(-1,dp(38)));
     }
-    public void showSettings() {
-        if(renderer.state.phase==GameState.RUNNING) pauseGame();
-        Settings draft=new Settings(settings);
-        LinearLayout box=column();box.setPadding(dp(22),dp(16),dp(22),dp(18));
-        box.addView(label("POSTAVKE VOŽNJE",23,WHITE));space(box,10);
-        heading(box,"SLIKA");
-        spinner(box,"Grafika",Settings.QUALITY,draft.quality,n->draft.quality=n);
-        spinner(box,"Ograničenje FPS-a",new String[]{"30 FPS","60 FPS","120 FPS"},draft.fps==30?0:draft.fps==60?1:2,n->draft.fps=new int[]{30,60,120}[n]);
-        box.addView(label("120 FPS je gornja granica; stvarni FPS zavisi od telefona i postavki.",11,MUTED));
-        toggle(box,"Sjaj svjetala",draft.bloom,b->draft.bloom=b);
-        toggle(box,"Sjene ispod auta",draft.shadows,b->draft.shadows=b);
-        toggle(box,"Noć umjesto sumraka",draft.night,b->draft.night=b);
-        toggle(box,"Prikaži stvarni FPS",draft.showFps,b->draft.showFps=b);
-        spinner(box,"Kamera",new String[]{"Praćenje izbliza","Praćenje izdaleka","Pogled s haube"},draft.camera,n->draft.camera=n);
-        slider(box,"Vidno polje",48,85,(int)draft.fov,"°",n->draft.fov=n);
-        heading(box,"UPRAVLJANJE");
-        spinner(box,"Kontrole",new String[]{"Naginjanje telefona","Strelice na ekranu"},draft.control,n->draft.control=n);
-        if(steeringSensor==null) box.addView(label("Senzor nije dostupan; koristi strelice.",12,MINT));
-        slider(box,"Osjetljivost",40,250,Math.round(draft.sensitivity*100),"%",n->draft.sensitivity=n/100f);
-        toggle(box,"Obrni smjer naginjanja",draft.invert,b->draft.invert=b);
-        box.addView(label("Drži telefon udobno i poravnaj volan prije vožnje. Gas i kočnica se drže prstom.",12,MUTED));
-        heading(box,"ZVUK");
-        slider(box,"Muzika",0,100,Math.round(draft.music*100),"%",n->draft.music=n/100f);
-        slider(box,"Motor i efekti",0,100,Math.round(draft.effects*100),"%",n->draft.effects=n/100f);
-        toggle(box,"Vibracija pri sudaru",draft.vibration,b->draft.vibration=b);space(box,12);
-        Dialog dialog=makeDialog(box);
-        box.addView(button("SPREMI POSTAVKE",true,()->{
-            if(steeringSensor==null) draft.control=1;
-            applySettings(draft);dialog.dismiss();refreshOverlay();
-        }),new LinearLayout.LayoutParams(-1,dp(44)));
-        space(box,8);box.addView(button("ODUSTANI",false,dialog::dismiss),new LinearLayout.LayoutParams(-1,dp(40)));
+    public void showSettings(){
+        if(renderer.state.phase==GameState.RUNNING)pauseGame();
+        Settings draft=new Settings(settings);LinearLayout box=column();box.setPadding(dp(22),dp(16),dp(22),dp(18));
+        box.addView(label(t("settings"),23,WHITE));space(box,10);
+        spinner(box,t("language"),L.LANGUAGES,draft.language,n->draft.language=n);
+        heading(box,t("image"));spinner(box,t("graphics"),L.options(settings,"quality",4),draft.quality,n->draft.quality=n);
+        spinner(box,t("fps"),new String[]{"30 FPS","60 FPS","120 FPS"},draft.fps==30?0:draft.fps==60?1:2,n->draft.fps=new int[]{30,60,120}[n]);
+        box.addView(label(t("fpsHint"),11,MUTED));
+        toggle(box,t("bloom"),draft.bloom,b->draft.bloom=b);toggle(box,t("shadows"),draft.shadows,b->draft.shadows=b);
+        toggle(box,t("night"),draft.night,b->draft.night=b);toggle(box,t("wet"),draft.wet,b->draft.wet=b);
+        toggle(box,t("showFps"),draft.showFps,b->draft.showFps=b);
+        spinner(box,t("camera"),L.options(settings,"camera",3),draft.camera,n->draft.camera=n);
+        slider(box,t("fov"),48,85,(int)draft.fov,"°",n->draft.fov=n);
+        heading(box,t("controlHeading"));spinner(box,t("controls"),L.options(settings,"control",2),draft.control,n->draft.control=n);
+        if(steeringSensor==null)box.addView(label(t("sensorMissing"),12,MINT));
+        slider(box,t("sensitivity"),40,250,Math.round(draft.sensitivity*100),"%",n->draft.sensitivity=n/100f);
+        toggle(box,t("invert"),draft.invert,b->draft.invert=b);toggle(box,t("autoGas"),draft.autoGas,b->draft.autoGas=b);
+        box.addView(label(t("controlsHint"),12,MUTED));
+        heading(box,t("audio"));slider(box,t("music"),0,100,Math.round(draft.music*100),"%",n->draft.music=n/100f);
+        slider(box,t("effects"),0,100,Math.round(draft.effects*100),"%",n->draft.effects=n/100f);
+        toggle(box,t("vibration"),draft.vibration,b->draft.vibration=b);space(box,12);
+        Dialog dialog=makeDialog(box);Button save=button(t("save"),true,()->{
+            if(steeringSensor==null)draft.control=1;applySettings(draft);dialog.dismiss();refreshOverlay();
+        });save.setTag("saveSettings");box.addView(save,new LinearLayout.LayoutParams(-1,dp(44)));
+        space(box,8);box.addView(button(t("cancel"),false,dialog::dismiss),new LinearLayout.LayoutParams(-1,dp(40)));
         dialog.show();sizeDialog(dialog);
     }
-    private void showGarage() {
-        Settings draft=new Settings(settings);LinearLayout box=column();box.setPadding(dp(22),dp(20),dp(22),dp(20));
-        box.addView(label("TVOJA GARAŽA",24,WHITE));space(box,8);
-        box.addView(label("Tri originalna modela. Izaberi svoj stil.",13,MUTED));space(box,14);
-        spinner(box,"Auto",Settings.CARS,draft.car,n->draft.car=n);
-        spinner(box,"Boja",new String[]{"Menta","Koraljna","Biserna","Ljubičasta","Zlatna","Ponoćna"},draft.paint,n->draft.paint=n);
-        Dialog dialog=makeDialog(box);space(box,12);
-        box.addView(button("SPREMI I POGLEDAJ AUTO",true,()->{applySettings(draft);dialog.dismiss();showMenu();}),new LinearLayout.LayoutParams(-1,dp(44)));
-        space(box,8);box.addView(button("ODUSTANI",false,dialog::dismiss),new LinearLayout.LayoutParams(-1,dp(40)));
-        dialog.show();sizeDialog(dialog);
+    public void showGarage(){
+        renderer.garage=true;renderer.orbitYaw=34;clearInputs();showGaragePanel(new Settings(settings));
+    }
+    private void showGaragePanel(Settings draft){
+        overlay.removeAllViews();overlay.setBackgroundColor(Color.TRANSPARENT);
+        int screen=getResources().getDisplayMetrics().widthPixels;
+        int panelWidth=Math.min(dp(338),Math.round(screen*.43f));
+        renderer.garageFraction=(screen-panelWidth)/(float)screen;
+        View orbit=new View(this){
+            private float last;
+            @Override public boolean onTouchEvent(MotionEvent e){
+                if(e.getActionMasked()==MotionEvent.ACTION_DOWN)last=e.getX();
+                if(e.getActionMasked()==MotionEvent.ACTION_MOVE){renderer.orbitYaw+=(e.getX()-last)*.4f;last=e.getX();}
+                if(e.getActionMasked()==MotionEvent.ACTION_UP)performClick();return true;
+            }
+            @Override public boolean performClick(){super.performClick();return true;}
+        };
+        orbit.setTag("orbit");overlay.addView(orbit,new FrameLayout.LayoutParams(screen-panelWidth,-1,Gravity.LEFT));
+        LinearLayout title=column();title.addView(label(Settings.CARS[draft.car],25,WHITE));title.addView(label(t("rotate"),12,MUTED));
+        FrameLayout.LayoutParams tp=new FrameLayout.LayoutParams(screen-panelWidth-dp(48),-2,Gravity.TOP|Gravity.LEFT);
+        tp.leftMargin=Math.max(dp(24),safeLeft);tp.topMargin=dp(18);overlay.addView(title,tp);
+        TextView stats=label("",15,WHITE);stats.setPadding(dp(14),dp(12),dp(14),dp(12));
+        stats.setBackground(shape(0xd30c1928,0xff284555,14));
+        FrameLayout.LayoutParams sp=new FrameLayout.LayoutParams(screen-panelWidth-dp(48),-2,Gravity.BOTTOM|Gravity.LEFT);
+        sp.leftMargin=Math.max(dp(24),safeLeft);sp.bottomMargin=dp(18);overlay.addView(stats,sp);
+        Runnable preview=()->{
+            renderer.preview=new Settings(draft);VehicleSpec spec=new VehicleSpec(draft);
+            stats.setText(spec.hp+" "+t("power")+"   /   "+spec.cylinders+" cyl   /   "+spec.ratios.length+" AT\n"+
+                Math.round(spec.shiftDuration*1000)+" ms "+t("shift")+"   ·   +"+Math.round((spec.grip-1)*100)+"% "+t("grip"));
+        };preview.run();
+        LinearLayout panel=column();panel.setPadding(dp(16),dp(14),Math.max(dp(16),safeRight),dp(14));
+        panel.setBackground(shape(0xf70a1623,0xff294253,0));
+        FrameLayout.LayoutParams pp=new FrameLayout.LayoutParams(panelWidth,-1,Gravity.RIGHT);overlay.addView(panel,pp);
+        panel.addView(label(t("workshop"),18,MINT));space(panel,8);
+        ScrollView scroll=new ScrollView(this);LinearLayout box=column();scroll.addView(box);panel.addView(scroll,new LinearLayout.LayoutParams(-1,0,1));
+        garageSpinner(box,t("car"),Settings.CARS,draft.car,n->{draft.car=n;showGaragePanel(draft);});
+        garageSpinner(box,t("paint"),L.options(settings,"paint",6),draft.paint,n->{draft.paint=n;preview.run();});
+        garageSpinner(box,t("engine"),L.options(settings,"stage",4),draft.engines[draft.car],n->{draft.engines[draft.car]=n;preview.run();});
+        garageSpinner(box,t("gearbox"),L.options(settings,"gearbox",3),draft.gearboxes[draft.car],n->{draft.gearboxes[draft.car]=n;preview.run();});
+        garageSpinner(box,t("tyres"),L.options(settings,"tyres",3),draft.tyres[draft.car],n->{draft.tyres[draft.car]=n;preview.run();});
+        garageSpinner(box,t("kit"),L.options(settings,"kit",3),draft.kits[draft.car],n->{draft.kits[draft.car]=n;preview.run();});
+        garageSpinner(box,t("rims"),L.options(settings,"rims",3),draft.rims,n->{draft.rims=n;preview.run();});
+        toggle(box,t("neon"),draft.neon,b->{draft.neon=b;preview.run();});box.addView(label(t("tuneHint"),11,MUTED));space(box,12);
+        space(panel,8);Button save=button(t("applyTune"),true,()->{applySettings(draft);showMenu();});save.setTag("saveTune");
+        panel.addView(save,new LinearLayout.LayoutParams(-1,dp(42)));space(panel,6);
+        panel.addView(button(t("cancel"),false,this::showMenu),new LinearLayout.LayoutParams(-1,dp(34)));
+    }
+    private void garageSpinner(LinearLayout box,String title,String[] values,int selected,IntConsumer change){
+        space(box,8);box.addView(label(title,12,MUTED));Spinner spinner=new Spinner(this);
+        setupSpinner(spinner,values,selected,change);box.addView(spinner,new LinearLayout.LayoutParams(-1,dp(41)));
     }
     void applySettings(Settings changed) {
         settings=new Settings(changed);settings.save(preferences);renderer.settings=settings;sound.settings=settings;
@@ -326,9 +398,9 @@ public class MainActivity extends Activity implements SensorEventListener,Choreo
     }
     public void showGraphicsError(String message) {
         if(isFinishing()||isDestroyed()) return;
-        new AlertDialog.Builder(this).setTitle("Grafika se nije pokrenula")
-            .setMessage("Ova verzija treba OpenGL ES 3.0. Detalj: "+message)
-            .setPositiveButton("Zatvori",(d,w)->finish()).show();
+        new AlertDialog.Builder(this).setTitle(t("graphicsError"))
+            .setMessage(t("graphicsNeed")+message)
+            .setPositiveButton(t("close"),(d,w)->finish()).show();
     }
     int dp(float value) {return Math.round(value*getResources().getDisplayMetrics().density);}
     private LinearLayout column() {LinearLayout l=new LinearLayout(this);l.setOrientation(LinearLayout.VERTICAL);return l;}
@@ -353,11 +425,15 @@ public class MainActivity extends Activity implements SensorEventListener,Choreo
         LinearLayout row=new LinearLayout(this);row.setGravity(Gravity.CENTER_VERTICAL);
         row.addView(label(title,13,WHITE),new LinearLayout.LayoutParams(0,dp(44),1));
         Spinner s=new Spinner(this);
+        setupSpinner(s,values,selected,change);
+        row.addView(s,new LinearLayout.LayoutParams(dp(225),dp(44)));l.addView(row);
+    }
+    private void setupSpinner(Spinner s,String[] values,int selected,IntConsumer change){
         ArrayAdapter<String> a=new ArrayAdapter<>(this,android.R.layout.simple_spinner_item,values);
         a.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);s.setAdapter(a);s.setSelection(selected);
-        row.addView(s,new LinearLayout.LayoutParams(dp(225),dp(44)));l.addView(row);
         s.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener(){
-            public void onItemSelected(AdapterView<?> p,View v,int position,long id){change.accept(position);}
+            int previous=selected;
+            public void onItemSelected(AdapterView<?> p,View v,int position,long id){if(position!=previous){previous=position;change.accept(position);}}
             public void onNothingSelected(AdapterView<?> p){}
         });
     }

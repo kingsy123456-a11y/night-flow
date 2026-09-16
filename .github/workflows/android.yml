@@ -49,15 +49,15 @@ jobs:
       - name: Prepare installable APK
         run: |
           mkdir -p dist
-          cp app/build/outputs/apk/debug/app-debug.apk dist/Night-Flow.apk
-          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose dist/Night-Flow.apk
-          sha256sum dist/Night-Flow.apk > dist/SHA256SUMS.txt
+          cp app/build/outputs/apk/debug/app-debug.apk dist/Night-Flow-2.apk
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose dist/Night-Flow-2.apk
+          sha256sum dist/Night-Flow-2.apk > dist/SHA256SUMS.txt
           # The exact verified binary can also be transferred through a connector-only client.
-          python3 -c 'from pathlib import Path; import base64,hashlib; data=Path("dist/Night-Flow.apk").read_bytes(); print("NF_APK_SHA256="+hashlib.sha256(data).hexdigest()); print("NF_APK_BASE64="+base64.b64encode(data).decode())'
+          python3 -c 'from pathlib import Path; import base64,hashlib; data=Path("dist/Night-Flow-2.apk").read_bytes(); print("NF_APK_SHA256="+hashlib.sha256(data).hexdigest()); print("NF_APK_BASE64="+base64.b64encode(data).decode())'
       - name: Download Night Flow APK
         uses: actions/upload-artifact@v7
         with:
-          path: dist/Night-Flow.apk
+          path: dist/Night-Flow-2.apk
           archive: false
           if-no-files-found: error
           retention-days: 90

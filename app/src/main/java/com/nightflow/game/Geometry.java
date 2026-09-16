@@ -83,58 +83,176 @@ public final class Geometry {
                 tri(rings[last][0],rings[last][j],rings[last][j+1],color,kind);
             }
         }
+        float curve(float[] values,float at){
+            int i=Math.min(values.length-2,(int)at);float t=at-i;
+            float a=values[Math.max(0,i-1)],b=values[i],c=values[i+1],d=values[Math.min(values.length-1,i+2)];
+            return .5f*((2*b)+(-a+c)*t+(2*a-5*b+4*c-d)*t*t+(-a+3*b-3*c+d)*t*t*t);
+        }
+        void skin(float[] zs,float[] widths,float[] bottoms,float[] tops,int color,int kind){
+            int along=(zs.length-1)*5+1,around=32;
+            float[][][] v=new float[along][around][3],n=new float[along][around][3];
+            for(int i=0;i<along;i++){
+                float at=i/5f,z=curve(zs,at),w=curve(widths,at),b=curve(bottoms,at),t=curve(tops,at);
+                for(int j=0;j<around;j++){
+                    double a=j*Math.PI*2/around;float co=(float)Math.cos(a),si=(float)Math.sin(a);
+                    float xx=(float)Math.copySign(Math.pow(Math.abs(co),.46),co);
+                    float yy=(float)Math.copySign(Math.pow(Math.abs(si),.58),si);
+                    v[i][j]=p(w*xx,b+(t-b)*(.5f+.5f*yy),z);
+                }
+            }
+            for(int i=0;i<along;i++)for(int j=0;j<around;j++){
+                float[] a=v[i][(j+around-1)%around],b=v[i][(j+1)%around];
+                float[] c=v[Math.max(0,i-1)][j],d=v[Math.min(along-1,i+1)][j];
+                float ux=b[0]-a[0],uy=b[1]-a[1],uz=b[2]-a[2],vx=d[0]-c[0],vy=d[1]-c[1],vz=d[2]-c[2];
+                float nx=uy*vz-uz*vy,ny=uz*vx-ux*vz,nz=ux*vy-uy*vx;
+                float len=(float)Math.sqrt(nx*nx+ny*ny+nz*nz);n[i][j]=p(nx/len,ny/len,nz/len);
+            }
+            for(int i=0;i<along-1;i++)for(int j=0;j<around;j++){
+                int k=(j+1)%around;
+                vertex(v[i][j],n[i][j],color,kind);vertex(v[i][k],n[i][k],color,kind);vertex(v[i+1][k],n[i+1][k],color,kind);
+                vertex(v[i][j],n[i][j],color,kind);vertex(v[i+1][k],n[i+1][k],color,kind);vertex(v[i+1][j],n[i+1][j],color,kind);
+            }
+            for(int end:new int[]{0,along-1}){
+                float[] center=p(0,(bottoms[end==0?0:bottoms.length-1]+tops[end==0?0:tops.length-1])/2,zs[end==0?0:zs.length-1]);
+                for(int j=0;j<around;j++){
+                    float[] normal=p(0,0,end==0?-1:1);vertex(center,normal,color,kind);
+                    vertex(v[end][j],normal,color,kind);vertex(v[end][(j+1)%around],normal,color,kind);
+                }
+            }
+        }
+        void ellipsoid(float x,float y,float z,float rx,float ry,float rz,int color,int kind){
+            int lon=14,lat=8;
+            for(int i=0;i<lat;i++)for(int j=0;j<lon;j++){
+                float[][] ps=new float[4][3],ns=new float[4][3];int[][] ij={{i,j},{i,j+1},{i+1,j+1},{i+1,j}};
+                for(int k=0;k<4;k++){
+                    double a=ij[k][0]*Math.PI/lat,b=ij[k][1]*Math.PI*2/lon;
+                    float xx=(float)(Math.sin(a)*Math.cos(b)),yy=(float)Math.cos(a),zz=(float)(Math.sin(a)*Math.sin(b));
+                    ps[k]=p(x+xx*rx,y+yy*ry,z+zz*rz);float len=(float)Math.sqrt(xx*xx/(rx*rx)+yy*yy/(ry*ry)+zz*zz/(rz*rz));
+                    ns[k]=p(xx/rx/len,yy/ry/len,zz/rz/len);
+                }
+                for(int k:new int[]{0,1,2,0,2,3})vertex(ps[k],ns[k],color,kind);
+            }
+        }
+        void beam(float[] a,float[] b,float radius,int color,int kind){
+            float dx=b[0]-a[0],dy=b[1]-a[1],dz=b[2]-a[2];
+            float len=(float)Math.sqrt(dx*dx+dy*dy+dz*dz);if(len<.001f)return;
+            dx/=len;dy/=len;dz/=len;
+            float ux=dy,uy=-dx,uz=0;if(Math.abs(ux)+Math.abs(uy)<.01f){ux=1;uy=0;}
+            float ul=(float)Math.sqrt(ux*ux+uy*uy);ux/=ul;uy/=ul;
+            float vx=dy*uz-dz*uy,vy=dz*ux-dx*uz,vz=dx*uy-dy*ux;
+            for(int i=0;i<8;i++){
+                double t=i*Math.PI/4,q=(i+1)*Math.PI/4;
+                float[] n1=p((float)(ux*Math.cos(t)+vx*Math.sin(t)),(float)(uy*Math.cos(t)+vy*Math.sin(t)),(float)(uz*Math.cos(t)+vz*Math.sin(t)));
+                float[] n2=p((float)(ux*Math.cos(q)+vx*Math.sin(q)),(float)(uy*Math.cos(q)+vy*Math.sin(q)),(float)(uz*Math.cos(q)+vz*Math.sin(q)));
+                float[][] ps={p(a[0]+n1[0]*radius,a[1]+n1[1]*radius,a[2]+n1[2]*radius),p(b[0]+n1[0]*radius,b[1]+n1[1]*radius,b[2]+n1[2]*radius),p(b[0]+n2[0]*radius,b[1]+n2[1]*radius,b[2]+n2[2]*radius),p(a[0]+n2[0]*radius,a[1]+n2[1]*radius,a[2]+n2[2]*radius)};
+                for(int k:new int[]{0,1,2,0,2,3})vertex(ps[k],k<2?n1:n2,color,kind);
+            }
+        }
         Mesh build() { return new Mesh(Arrays.copyOf(data,at)); }
     }
     static float[] p(float x,float y,float z) { return new float[]{x,y,z}; }
 
-    public static Mesh car(int style) {
-        Builder b=new Builder();
-        float stretch=style==1?1.08f:1;
-        float roof=style==1?1.52f:style==2?1.26f:1.36f;
-        float[] zs={-2.16f*stretch,-1.85f*stretch,-.68f,.78f,1.85f*stretch,2.12f*stretch};
-        b.loft(zs,new float[]{.66f,.87f,.96f,.96f,.89f,.76f},
-            new float[]{.36f,.28f,.26f,.26f,.30f,.39f},
-            new float[]{.57f,.73f,.84f,.85f,.76f,.63f},0xffffff,2);
-        b.box(0,.28f,0,1.6f,.16f,3.8f,0x111923,0);
-        b.loft(new float[]{-1.04f,-.45f,.57f,1.22f},
-            new float[]{.75f,.67f,.67f,.76f},
-            new float[]{.8f,.82f,.82f,.81f},
-            new float[]{.83f,roof,roof+.03f,.84f},0x143249,6);
-        b.box(0,roof+.015f,.05f,1.05f,.055f,.98f,0xffffff,2);
-        for(int s:new int[]{-1,1}) {
-            b.box(s*.8f,.77f,.25f,.04f,.07f,1.92f,0x819daa,0);
-            b.box(s*.69f,1.12f,.24f,.065f,.51f,.075f,0x162637,0);
-            b.box(s*.98f,.91f,-.67f,.22f,.13f,.29f,0xffffff,2);
-            b.box(s*.946f,.69f,.47f,.025f,.045f,.19f,0xc4d0d8,0);
-            for(float z:new float[]{-1.35f*stretch,1.32f*stretch}) {
-                b.cylinderX(s*.87f,.365f,z,.365f,.265f,0x10151c,24);
-                b.cylinderX(s*1.013f,.365f,z,.241f,.015f,0x52677b,24);
-                b.cylinderX(s*1.024f,.365f,z,.176f,.02f,0x15212d,20);
-                b.cylinderX(s*1.04f,.365f,z,.075f,.025f,0xd2dce3,16);
-                for(int i=0;i<5;i++) {
-                    double a=i*Math.PI*2/5;
-                    float y=.365f+(float)Math.cos(a)*.13f,zz=z+(float)Math.sin(a)*.13f;
-                    b.box(s*1.038f,y,zz,.02f,.105f,.052f,0xb0bac8,0);
+    public static Mesh car(int style){return car(style,0);}
+    public static Mesh car(int style,int kit){
+        Builder b=new Builder();float stretch=style==1?1.09f:style==2?.93f:1;
+        float roof=style==1?1.46f:style==2?1.40f:style==3?1.16f:1.29f;
+        float wide=kit==2?.105f:kit==1?.025f:0;
+        float[] z={-2.28f*stretch,-2.10f*stretch,-1.48f*stretch,-.55f,.55f,1.42f*stretch,2.06f*stretch,2.22f*stretch};
+        b.skin(z,new float[]{.72f,.88f+wide,.95f+wide,.92f,.93f,.99f+wide,.95f+wide,.79f},
+            new float[]{.30f,.24f,.26f,.25f,.25f,.26f,.28f,.35f},
+            new float[]{.61f,.70f,.84f,.86f,.89f,.83f,.77f,.66f},0xffffff,2);
+        b.box(0,.255f,0,1.70f,.13f,3.9f*stretch,0x111820,9);
+        b.skin(new float[]{-1.04f,-.48f,.35f,.77f,1.48f},new float[]{.75f,.65f,.65f,.65f,.78f},
+            new float[]{.82f,.84f,.85f,.85f,.81f},new float[]{.85f,roof,roof+.045f,roof,.83f},0x132c40,6);
+        b.skin(new float[]{-.51f,-.32f,.35f,.75f},new float[]{.50f,.61f,.61f,.48f},
+            new float[]{roof-.01f,roof+.005f,roof+.014f,roof-.01f},new float[]{roof+.021f,roof+.055f,roof+.065f,roof+.02f},0xffffff,2);
+        // Continuous pillars, window seals, door shut-lines and mirrors.
+        for(int side:new int[]{-1,1}){
+            b.beam(p(side*.78f,.84f,-1.05f),p(side*.66f,roof,-.48f),.032f,0xffffff,2);
+            b.beam(p(side*.67f,roof,.76f),p(side*.79f,.84f,1.49f),.055f,0xffffff,2);
+            b.beam(p(side*.68f,roof+.005f,.35f),p(side*.83f,.84f,.35f),.035f,0x09131b,0);
+            b.beam(p(side*.80f,.849f,-.98f),p(side*.84f,.862f,1.12f),.014f,0x71858e,7);
+            b.beam(p(side*.934f,.77f,.4f),p(side*.935f,.4f,.43f),.006f,0x132129,0);
+            b.ellipsoid(side*1.0f,.88f,-.67f,.18f,.065f,.17f,0xffffff,2);
+            b.box(side*.945f,.72f,.56f,.024f,.023f,.19f,0x718595,7);
+            b.box(side*.942f,.38f,.3f,.023f,.018f,1.50f,0x132129,9);
+            b.box(side*.61f,.62f,z[0]-.008f,.46f,.05f,.025f,0xd4eeff,3);
+            b.box(side*.55f,.56f,z[0]-.015f,.35f,.035f,.024f,0x243549,0);
+            b.box(side*.68f,.40f,z[0]+.02f,.29f,.12f,.045f,0x091016,9);
+            b.box(side*.60f,.64f,z[z.length-1]+.008f,.48f,.044f,.028f,0xf03930,10);
+            b.box(side*.56f,.32f,z[z.length-1]+.05f,.24f,.085f,.13f,0xa5afb5,7);
+            b.box(side*.56f,.32f,z[z.length-1]+.12f,.17f,.051f,.015f,0x060c13,0);
+            b.beam(p(side*.55f,.76f,-1.99f),p(side*.59f,.855f,-.95f),.009f,0xffffff,2);
+            if(kit>0){
+                b.box(side*(.94f+wide),.24f,.08f,.12f,.065f,3.2f,0x161b25,9);
+                b.box(side*.57f,1.0f,1.85f*stretch,.055f,.39f,.08f,0x1f2931,9);
+            }
+            if(kit==2)for(float zz:new float[]{-1.40f*stretch,1.40f*stretch}){
+                for(int i=0;i<14;i++){
+                    double a=Math.PI*i/14,aa=Math.PI*(i+1)/14;
+                    b.beam(p(side*1.02f,.37f+(float)Math.sin(a)*.42f,zz+(float)Math.cos(a)*.42f),
+                        p(side*1.02f,.37f+(float)Math.sin(aa)*.42f,zz+(float)Math.cos(aa)*.42f),.052f,0xffffff,2);
                 }
             }
-            b.box(s*.57f,.59f,zs[0]-.015f,.35f,.065f,.05f,0xc8f8ff,3);
-            b.box(s*.52f,.58f,zs[zs.length-1]+.015f,.43f,.065f,.045f,0xff294d,3);
-            b.box(s*.54f,.335f,zs[zs.length-1]+.02f,.18f,.12f,.08f,0x85949f,0);
         }
-        b.box(0,.46f,zs[0]-.02f,.7f,.13f,.035f,0x0c151e,0);
-        b.box(0,.60f,zs[zs.length-1]+.04f,.45f,.08f,.032f,0xdbe8ed,0);
-        b.box(0,.53f,zs[zs.length-1]+.05f,.25f,.055f,.02f,0x173249,0);
-        if(style==2) {
-            b.box(-.55f,.97f,1.74f,.08f,.28f,.09f,0x152230,0);
-            b.box(.55f,.97f,1.74f,.08f,.28f,.09f,0x152230,0);
-            b.box(0,1.12f,1.74f,1.8f,.06f,.28f,0x1b2d3b,0);
-            b.box(0,.86f,-1.35f,.33f,.015f,.56f,0x17303c,0);
+        b.box(0,.45f,z[0]-.02f,.79f,.13f,.035f,0x080f16,9);
+        for(int i=0;i<7;i++)b.box(-.32f+i*.105f,.45f,z[0]-.041f,.012f,.095f,.016f,0x71818d,7);
+        b.box(0,.525f,z[z.length-1]+.023f,.43f,.11f,.018f,0xbdc5c9,0);
+        b.box(0,.545f,z[z.length-1]+.037f,.18f,.028f,.016f,0x122332,0);
+        b.box(0,.24f,z[z.length-1]-.10f,1.65f,.085f,.4f,0x101b26,9);
+        if(style==3)b.box(0,.642f,z[z.length-1]+.024f,.76f,.029f,.02f,0xe83c35,10);
+        if(kit>0){
+            b.skin(new float[]{1.65f*stretch,1.78f*stretch,1.94f*stretch},new float[]{1.05f,1.08f,1.04f},new float[]{1.17f,1.17f,1.14f},new float[]{1.21f,1.225f,1.20f},0x17212d,9);
+            b.box(0,.23f,z[0]+.06f,2.00f+wide,.06f,.42f,0x14212d,9);
+            if(kit==2){b.box(-1.06f,1.18f,1.8f*stretch,.045f,.18f,.42f,0x101e26,9);b.box(1.06f,1.18f,1.8f*stretch,.045f,.18f,.42f,0x101e26,9);}
         }
         return b.build();
     }
+    public static Mesh wheel(){
+        Builder b=new Builder();int around=32,tube=10;
+        float[][][] pos=new float[around][tube][3],norm=new float[around][tube][3];
+        for(int i=0;i<around;i++)for(int j=0;j<tube;j++){
+            double a=i*Math.PI*2/around,t=j*Math.PI*2/tube;
+            float x=(float)Math.sin(t)*.125f,r=.285f+(float)Math.cos(t)*.081f;
+            pos[i][j]=p(x,(float)Math.sin(a)*r,(float)Math.cos(a)*r);
+            norm[i][j]=p((float)Math.sin(t),(float)(Math.cos(t)*Math.sin(a)),(float)(Math.cos(t)*Math.cos(a)));
+        }
+        for(int i=0;i<around;i++)for(int j=0;j<tube;j++){
+            int ii=(i+1)%around,jj=(j+1)%tube;int[][] ids={{i,j},{ii,j},{ii,jj},{i,j},{ii,jj},{i,jj}};
+            for(int[] id:ids)b.vertex(pos[id[0]][id[1]],norm[id[0]][id[1]],0x171b20,11);
+        }
+        for(int side:new int[]{-1,1}){
+            b.cylinderX(side*.107f,0,0,.224f,.012f,0x25313b,32);
+            b.cylinderX(side*.132f,0,0,.048f,.01f,0x9babb6,20);
+            for(int i=0;i<10;i++){
+                double a=i*Math.PI*2/10;
+                b.beam(p(side*.131f,(float)Math.sin(a)*.047f,(float)Math.cos(a)*.047f),
+                    p(side*.122f,(float)Math.sin(a+.09)*.226f,(float)Math.cos(a+.09)*.226f),.013f,0xc8d0d6,12);
+            }
+            for(int i=0;i<32;i++){
+                double a=i*Math.PI*2/32,aa=(i+1)*Math.PI*2/32;
+                b.beam(p(side*.125f,(float)Math.sin(a)*.234f,(float)Math.cos(a)*.234f),
+                    p(side*.125f,(float)Math.sin(aa)*.234f,(float)Math.cos(aa)*.234f),.014f,0xd5dee2,12);
+            }
+        }
+        return b.build();
+    }
+    public static Mesh showroom(){
+        Builder b=new Builder();b.quad(p(-100,-.018f,100),p(100,-.018f,100),p(100,-.018f,-100),p(-100,-.018f,-100),0x26303e,8);
+        for(int i=0;i<96;i++){
+            double a=i*Math.PI*2/96,q=(i+1)*Math.PI*2/96;
+            b.quad(p((float)Math.cos(a)*3.25f,.005f,(float)Math.sin(a)*3.25f),p((float)Math.cos(q)*3.25f,.005f,(float)Math.sin(q)*3.25f),
+                p((float)Math.cos(q)*3.28f,.005f,(float)Math.sin(q)*3.28f),p((float)Math.cos(a)*3.28f,.005f,(float)Math.sin(a)*3.28f),0x769dab,3);
+        }
+        return b.build();
+    }
+    public static Mesh gate(){
+        Builder b=new Builder();b.box(-2.05f,1.45f,0,.06f,2.9f,.06f,0x65dabc,3);b.box(2.05f,1.45f,0,.06f,2.9f,.06f,0x65dabc,3);
+        b.box(0,2.92f,0,4.16f,.06f,.06f,0x65dabc,3);return b.build();
+    }
     public static Mesh road() {
         Builder b=new Builder();
-        b.quad(p(-7,0,24),p(7,0,24),p(7,0,-610),p(-7,0,-610),0x273245,1);
+        b.quad(p(-7,0,24),p(7,0,24),p(7,0,-610),p(-7,0,-610),0x33383e,1);
         return b.build();
     }
     public static Mesh ground() {
@@ -163,7 +281,7 @@ public final class Geometry {
         for(int s:new int[]{-1,1}) {
             b.box(s*8.55f,.64f,-160,.12f,.12f,320,0x516678,0);
             for(int i=0;i<64;i++) b.box(s*8.55f,.32f,-i*5,.1f,.64f,.1f,0x3a4d5b,0);
-            int count=detailed?48:25;
+            int count=detailed?38:24;
             for(int i=0;i<count;i++) {
                 float z=-r.nextFloat()*320, x=s*(16+r.nextFloat()*(detailed?65:37));
                 float w=4+r.nextFloat()*9,h=7+r.nextFloat()*48,d=5+r.nextFloat()*9;
@@ -177,11 +295,8 @@ public final class Geometry {
             for(int i=0;i<20;i++) {
                 float z=-i*16+3,x=s*(10.6f+r.nextFloat()*2);
                 b.box(x,1.5f,z,.22f,3,.22f,0x2a3543,0);
-                float[] top=p(x,5.6f,z);
-                float[] a=p(x-1.3f,2,z-1.3f),bb=p(x+1.3f,2,z-1.3f);
-                float[] c=p(x+1.3f,2,z+1.3f),d=p(x-1.3f,2,z+1.3f);
-                b.tri(a,top,bb,0x254650,0);b.tri(bb,top,c,0x305359,0);
-                b.tri(c,top,d,0x254650,0);b.tri(d,top,a,0x1f3e47,0);
+                b.ellipsoid(x,4.4f,z,1.45f,2.15f,1.55f,0x385744,0);
+                if(detailed){b.ellipsoid(x-.85f,3.6f,z+.4f,1.0f,1.25f,1.2f,0x314c3b,0);b.ellipsoid(x+.75f,4.1f,z-.7f,1.1f,1.4f,1.1f,0x3f5e46,0);}
             }
         }
         // A gantry recurs once per tile; the route remains open beneath it.

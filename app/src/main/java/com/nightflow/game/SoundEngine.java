@@ -20,7 +20,7 @@ public final class SoundEngine {
     private long sample=0;
     private int dl=0,dr=0,random=12347,lastCrash=0;
     private float impact=0;
-    private double enginePhase=0;
+    private final EngineSynth engine=new EngineSynth();
     private static final int[][] CHORDS={{52,55,59,62},{48,52,55,59},{43,47,50,54},{50,54,57,64}};
     private static final int[] MELODY={0,7,12,10,7,3,14,7,0,12,7,3,10,7,2,7};
     public SoundEngine(GameState state,Settings settings) {
@@ -66,8 +66,9 @@ public final class SoundEngine {
     private void generate(short[] out) {
         Settings cfg=settings;
         double beatSeconds=60.0/78.0;
-        float motorLevel=state.phase==GameState.RUNNING&&state.countdown<=0?.045f:0;
-        float speed=state.speed;
+        int cylinders=cfg.car==1?8:cfg.car==3?10:cfg.car==2?4:6;
+        engine.configure(state.rpm,state.throttle,cylinders,state.shiftTime>0,state.shiftSerial,state.speed,
+            state.phase==GameState.RUNNING);
         if(lastCrash!=state.crashSerial) {lastCrash=state.crashSerial;impact=.45f;}
         for(int i=0;i<out.length;i+=2,sample++) {
             double time=sample/(double)RATE;
@@ -103,11 +104,7 @@ public final class SoundEngine {
             delayL[dl]=(padR+lead)*.24f+delayedL*.48f;
             delayR[dr]=(padL+lead)*.24f+delayedR*.48f;
             dl=(dl+1)%delayL.length;dr=(dr+1)%delayR.length;
-            enginePhase+=(32+speed*2.5)/RATE;
-            if(enginePhase>1) enginePhase-=1;
-            float engine=(osc(enginePhase)+.36f*osc(enginePhase*2)+.12f*osc(enginePhase*4))*motorLevel;
-            float rush=hiss*speed*.00015f*motorLevel*15;
-            float effect=(engine+rush+hiss*impact)*cfg.effects;
+            float effect=(engine.next()+hiss*impact)*cfg.effects;
             impact*=.9995f;
             float left=(padL+lead+bass+kick+hat+delayedL)*cfg.music+effect;
             float right=(padR+lead*.93f+bass+kick+hat+delayedR)*cfg.music+effect;
